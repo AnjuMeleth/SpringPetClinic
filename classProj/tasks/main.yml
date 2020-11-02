@@ -1,0 +1,25 @@
+---
+# tasks file for inclassProj
+- name: apt-update
+  apt:
+   update_cache: yes
+- name: Install Docker
+  apt:
+   name: docker.io
+   state: present
+- name: Create new directory
+  file:
+   path: /home/dockDeploy
+   state: directory
+- name: Copy war file
+  copy:
+   src: /var/lib/jenkins/workspace/spring_petclinic/target/spring-petclinic-2.1.0.BUILD-SNAPSHOT.jar
+   dest: /home/dockDeploy/
+- name: Copy Dockerfile
+  copy:
+   src: /var/lib/jenkins/workspace/spring_petclinic/Dockerfile
+   dest: /home/dockDeploy/
+- name: Build Docker Image
+  command: chdir=/home/dockDeploy/ docker build . -t anjurose/inclass
+- name: Run Docker Container
+  command: chdir=/home/dockDeploy/ docker run -it -d -p 8085:8080 anjurose/inclass
