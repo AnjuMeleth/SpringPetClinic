@@ -1,3 +1,5 @@
+*.css
+*.java
 target/*
 .settings/*
 .classpath
