@@ -137,3 +137,13 @@ The Spring PetClinic sample application is released under version 2.0 of the [Ap
 
 
 [spring-petclinic-rest]: https://github.com/spring-petclinic/spring-petclinic-rest
+---------------------------------------------------------------------------------------
+
+Minikube Jenkins:
+# To get the url of the jenkins webpage using minikube
+minikube service jenkins-svc --url
+
+# Jenkins password
+/var/jenkins_home/secrets/initialAdminPassword
+
+# Jenkins hook configured
