@@ -1,0 +1,71 @@
+# Docker
+# Build and push an image to Azure Container Registry
+# https://docs.microsoft.com/azure/devops/pipelines/languages/docker
+
+trigger:
+- main
+
+resources:
+- repo: self
+
+variables:
+  # Container registry service connection established during pipeline creation
+  dockerRegistryServiceConnection: '49cb93a9-691c-45e9-96bf-445e213e3adb'
+  imageRepository: 'noormuradispringpetclinic'
+  containerRegistry: 'npetclinic.azurecr.io'
+  dockerfilePath: '$(Build.SourcesDirectory)/Docker/Dockerfile'
+  tag: '$(Build.BuildId)'
+
+  # Agent VM image name
+  pool: 'self-hosted'
+
+stages:
+- stage: Build
+  displayName: Build and push stage
+  jobs:
+  - job: Build
+    displayName: Build
+    pool: 'self-hosted'
+      
+    steps:
+    - task: Docker@2
+      displayName: Build image with cache
+      inputs:
+        command: build
+        repository: $(imageRepository)
+        dockerfile: $(dockerfilePath)
+        buildContext: $(Build.SourcesDirectory)
+        containerRegistry: $(dockerRegistryServiceConnection)
+        tags: |
+          $(tag)
+          latest
+        arguments: --cache-from=$(containerRegistry)/$(imageRepository):latest
+
+    - task: Docker@2
+      displayName: Push image
+      inputs:
+        command: push
+        repository: $(imageRepository)
+        containerRegistry: $(dockerRegistryServiceConnection)
+        tags: |
+          $(tag)
+          latest
+
+
+- stage: Deploy
+  displayName: Deploy to Container App
+  jobs:
+  - job: Deploy
+    pool: 'self-hosted'
+    steps:
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: 'demo'   # Your Azure service connection
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az containerapp update \
+            -n petclinic \
+            -g demo \
+            --image npetclinic.azurecr.io/noormuradispringpetclinic:$(tag)
+

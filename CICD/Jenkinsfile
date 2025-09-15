@@ -1,0 +1,167 @@
+pipeline {
+  agent {
+    kubernetes {
+      yaml '''
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    type: docker
+spec:
+  containers:
+  - name: docker
+    image: 619580454142.dkr.ecr.us-east-1.amazonaws.com/jenkins-agent-pod:latest
+    imagePullPolicy: Always
+    command:
+    - cat
+    tty: true
+    volumeMounts:
+    - name: varlibcontainers
+      mountPath: /var/lib/containers
+  volumes:
+  - name: varlibcontainers
+    emptyDir: {}
+      '''
+      retries 2
+    }
+  }
+
+  options {
+    // Discard old builds per branch
+    buildDiscarder(logRotator(
+      daysToKeepStr: '1',   // keep builds for 14 days
+      numToKeepStr: '3',    // keep max 10 builds
+      artifactDaysToKeepStr: '0',  // keep artifacts for 7 days
+      artifactNumToKeepStr: '0'    // keep max 2 artifacts
+    ))
+  }
+
+  environment {
+    AWS_DEFAULT_REGION = "us-east-1"
+  }
+    
+  stages {
+    stage('Set Environment') {
+      steps {
+        script {
+          if (env.BRANCH_NAME == 'dev') {
+            env.ECR_REPO  = "400475625133.dkr.ecr.us-east-1.amazonaws.com"
+            env.DOCKER_TAG = "dev-${env.BUILD_NUMBER}"
+            env.IMAGE     = "hello-dev"
+          } else if (env.BRANCH_NAME == 'main') {
+            env.ECR_REPO  = "400475625133.dkr.ecr.us-east-1.amazonaws.com"
+            env.DOCKER_TAG = "prod-${env.BUILD_NUMBER}"
+            env.IMAGE     = "hello-prod"
+          }
+        }
+      }
+    }
+
+    stage('Checkout') {
+      steps {
+        container('docker'){
+           checkout scm
+        }
+      }
+    }
+    stage('Maven Build & Test') {
+      steps {
+        container('docker'){
+           sh "mvn clean install -Dmaven.test.skip=true"
+        }
+      }
+    }
+    stage('Build Container Image') {
+      when {
+        anyOf {
+          branch 'dev'
+          branch 'main'
+        }
+      }
+      steps {
+        container('docker') {
+          withAWS(credentials: 'aws-ecr-creds', region: "${AWS_DEFAULT_REGION}") {
+            sh '''
+              aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | \
+              buildah login --username AWS --password-stdin "$ECR_REPO"
+              
+              export STORAGE_DRIVER=vfs
+              LOCAL_TAG="$ECR_REPO/$IMAGE:$DOCKER_TAG"
+              
+              buildah --storage-driver=$STORAGE_DRIVER bud --isolation=chroot \
+                -t "$LOCAL_TAG" -f ./Docker/Dockerfile .
+              
+              buildah --storage-driver=$STORAGE_DRIVER push "$LOCAL_TAG" docker-archive:image.tar
+            '''
+          }
+        }
+      }
+    }
+
+    stage('Run Trivy Scan') {
+      when {
+        anyOf {
+          branch 'dev'
+          branch 'main'
+        }
+      }
+      steps {
+        container('docker') {
+          sh '''
+            trivy image --download-db-only && \
+            trivy image \
+              --input image.tar \
+              --severity HIGH,CRITICAL \
+              --ignore-unfixed \
+              --exit-code 0 \
+              --no-progress 
+          '''
+        }
+      }
+    }        
+
+    stage('Push Image to Repo') {
+      when {
+        anyOf {
+          branch 'dev'
+          branch 'main'
+        }
+      }
+      steps {
+        container('docker') {
+          withAWS(credentials: 'aws-ecr-creds', region: "${AWS_DEFAULT_REGION}") {
+            sh '''
+              skopeo copy \
+                --dest-creds AWS:$(aws ecr get-login-password --region $AWS_DEFAULT_REGION) \
+                docker-archive:image.tar \
+                docker://$ECR_REPO/$IMAGE:$DOCKER_TAG
+            '''
+          }
+        }
+      }
+    }
+  }
+
+  post {
+    success {
+      script {
+        if (env.CHANGE_ID) {
+          githubNotify context: 'jenkins/ci',
+                       status: 'SUCCESS',
+                       description: "Build passed",
+                       targetUrl: env.BUILD_URL
+        }
+      }
+    }
+    failure {
+      script {
+        if (env.CHANGE_ID) {
+          githubNotify context: 'jenkins/ci',
+                       status: 'FAILURE',
+                       description: "Build failed",
+                       targetUrl: env.BUILD_URL
+        }
+      }
+    }
+  }
+}
